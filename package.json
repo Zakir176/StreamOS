@@ -1,0 +1,11 @@
+{
+  "name": "streamos-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix streamos-ui",
+    "backend": "python -m uvicorn backend.app.main:app --host 0.0.0.0 --reload",
+    "install-ui": "npm install --prefix streamos-ui",
+    "build-ui": "npm run build --prefix streamos-ui"
+  }
+}
