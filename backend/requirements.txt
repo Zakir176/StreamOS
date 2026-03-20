@@ -1,0 +1,10 @@
+pydantic
+fastapi
+uvicorn[standard]
+python-multipart
+SQLAlchemy
+asyncpg
+python-dotenv
+requests
+ffmpeg-python
+Pillow

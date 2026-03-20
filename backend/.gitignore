@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Database
+streamos.db
+
+# Media and Thumbnails
+media/
+thumbnails/
+
+# Local/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
