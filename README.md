@@ -61,6 +61,7 @@ npm run dev
 ## 📖 Documentation
 - [User Manual](docs/UserManual.md) - How to use StreamOS.
 - [Development Guide](docs/DEVELOPMENT.md) - Architecture, API, and contribution guide.
+- [Media Organization Guide](docs/MEDIA_ORGANIZATION.md) - How to name and structure your files.
 
 ## 📄 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
