@@ -91,6 +91,122 @@ The backend provides a RESTful API for all system operations.
 
 ---
 
+## 📊 Database Schema
+
+StreamOS uses a relational SQLite database. Below is the entity relationship diagram:
+
+```mermaid
+erDiagram
+    profiles ||--o{ watch_progress : tracks
+    videos ||--o{ watch_progress : has
+    series ||--o{ videos : contains
+    
+    profiles {
+        int id PK
+        string username
+        string age_category
+        string avatar_url
+        string theme
+    }
+    
+    series {
+        int id PK
+        string title
+        string description
+        string poster_path
+        string backdrop_path
+        string category
+        string folder_category
+        string cast
+        string director
+        string trailer_url
+    }
+    
+    videos {
+        int id PK
+        string title
+        string filepath
+        string thumbnail_path
+        string backdrop_path
+        string category
+        string folder_category
+        string type
+        int series_id FK
+        int season
+        int episode
+        int release_year
+        string description
+        string cast
+        string director
+        string trailer_url
+        int duration
+    }
+    
+    watch_progress {
+        int id PK
+        int profile_id FK
+        int video_id FK
+        int current_time
+    }
+    
+    settings {
+        string key PK
+        string value
+    }
+```
+
+---
+
+## ⚙️ Configuration
+
+StreamOS can be configured via environment variables and the internal settings table.
+
+### Environment Variables
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TMDB_API_KEY` | API key for fetching metadata from TMDB. | `None` |
+| `VITE_API_BASE` | (Frontend) The base URL of the FastAPI backend. | `http://localhost:8000` |
+
+### Internal Settings (`settings` table)
+| Key | Description |
+|-----|-------------|
+| `media_dir` | The root directory where media is stored. |
+| `offline_mode` | If `true`, disables all external API calls (TMDB). |
+| `tmdb_api_key` | Mirror of the environment variable, editable via UI. |
+
+---
+
+## 🚢 Production Deployment
+
+For production environments, it is recommended to use a robust WSGI/ASGI server and a static file server.
+
+### 1. Backend (Uvicorn + Gunicorn)
+Run the backend with multiple workers for better performance:
+```bash
+cd backend
+gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:8000
+```
+
+### 2. Frontend (Static Hosting)
+Build the frontend and serve the `dist` folder using Nginx, Apache, or any static host:
+```bash
+cd streamos-ui
+npm run build
+```
+
+### 3. Docker (Recommended)
+The easiest way to deploy StreamOS is using Docker Compose:
+```bash
+docker-compose up -d --build
+```
+This will:
+- Build and start the FastAPI backend.
+- Build and start the Vue frontend (served by Nginx).
+- Automatically proxy `/api/` requests from the frontend to the backend.
+- Mount your `media/` and `thumbnails/` folders for persistence.
+
+---
+
 ## 🛠️ Development Setup & Tasks
 
 ### Adding New Features
