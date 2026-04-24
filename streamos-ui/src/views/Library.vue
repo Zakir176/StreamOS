@@ -77,7 +77,10 @@
       <div 
         class="billboard-background" 
         :key="featuredVideo.id"
-        :style="{ backgroundImage: `linear-gradient(to right, var(--bg-dark) 0%, transparent 60%), url(${API_BASE}${featuredVideo.backdrop_url || featuredVideo.thumbnail_url})` }"
+        :style="{ 
+          backgroundImage: `linear-gradient(to right, var(--bg-dark) 0%, transparent 60%), url(${getImageUrl(featuredVideo.backdrop_url || featuredVideo.thumbnail_url)})`,
+          '--billboard-color': featuredVideo.dominant_color || 'var(--bg-dark)'
+        }"
       >
         <div class="vignette"></div>
         
@@ -126,7 +129,7 @@
           @click="currentBillboardIndex = index; showTrailer = false"
         >
           <div class="nav-poster-mini shadow-lg">
-             <img :src="`${API_BASE}${item.backdrop_url || item.thumbnail_url}`" :alt="item.title" />
+             <img :src="getImageUrl(item.backdrop_url || item.thumbnail_url)" :alt="item.title" loading="lazy" />
              <div class="nav-timer" v-if="index === currentBillboardIndex"></div>
           </div>
         </div>
@@ -242,7 +245,7 @@
             @click="openPlayer(ep.id, ep.title)"
           >
             <div class="ep-thumb">
-              <img :src="`${API_BASE}${ep.thumbnail_url}`" :alt="ep.title" />
+              <img :src="getImageUrl(ep.thumbnail_url)" :alt="ep.title" />
               <div class="ep-play-btn">
                 <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
                   <path d="M5 3L19 12L5 21V3Z"/>
@@ -262,7 +265,7 @@
     <div v-if="selectedVideoDetail" class="series-modal-overlay" @click.self="selectedVideoDetail = null">
       <div class="series-modal glass">
         <button class="close-modal" @click="selectedVideoDetail = null">×</button>
-        <div class="series-hero movie-hero" :style="{ backgroundImage: `linear-gradient(to top, rgba(0,0,0,1), transparent), url(${API_BASE}${selectedVideoDetail.backdrop_url || selectedVideoDetail.thumbnail_url})` }">
+        <div class="series-hero movie-hero" :style="{ backgroundImage: `linear-gradient(to top, rgba(0,0,0,1), transparent), url(${getImageUrl(selectedVideoDetail.backdrop_url || selectedVideoDetail.thumbnail_url)})` }">
           <div class="series-hero-content">
             <h2>{{ selectedVideoDetail.title }}</h2>
             <p v-if="selectedVideoDetail.release_year">{{ selectedVideoDetail.release_year }}</p>
@@ -311,6 +314,13 @@ import VideoPlayer from '../components/VideoPlayer.vue'
 const router = useRouter()
 const route = useRoute()
 const API_BASE = import.meta.env.VITE_API_BASE
+
+const getImageUrl = (url, width) => {
+  if (!url) return ''
+  const baseUrl = url.startsWith('http') ? url : `${API_BASE}${url}`
+  const separator = baseUrl.includes('?') ? '&' : '?'
+  return width ? `${baseUrl}${separator}w=${width}` : baseUrl
+}
 const profileId = ref(localStorage.getItem('profile_id'))
 const profileName = ref(localStorage.getItem('profile_name') || 'User')
 const profileCategory = ref(localStorage.getItem('profile_category') || 'adult')
@@ -330,6 +340,7 @@ const handleResize = () => {
   isMobile.value = window.innerWidth <= 768
 }
 const selectedVideoDetail = ref(null)
+
 const currentTheme = ref(localStorage.getItem('profile_theme') || 'midnight')
 const searchQuery = ref('')
 const searchRef = ref(null)
@@ -338,39 +349,14 @@ const searchRef = ref(null)
 const currentAmbientColor = ref('rgb(20, 20, 20)')
 const ambientColorOpacity = ref(0.4)
 
-const getDominantColor = (imgUrl) => {
-  return new Promise((resolve) => {
-    const img = new Image()
-    img.crossOrigin = "Anonymous"
-    img.src = imgUrl
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      canvas.width = 50 // Low res for speed
-      canvas.height = 30
-      ctx.drawImage(img, 0, 0, 50, 30)
-      const data = ctx.getImageData(0, 0, 50, 30).data
-      let r = 0, g = 0, b = 0
-      for (let i = 0; i < data.length; i += 4) {
-        r += data[i]; g += data[i+1]; b += data[i+2]
-      }
-      const count = data.length / 4
-      resolve(`rgb(${Math.round(r/count)}, ${Math.round(g/count)}, ${Math.round(b/count)})`)
-    }
-    img.onerror = () => resolve('rgb(20, 20, 20)')
-  })
-}
-
 let colorDebounce = null
-const handleHover = async (video) => {
+const handleHover = (video) => {
   if (colorDebounce) clearTimeout(colorDebounce)
-  colorDebounce = setTimeout(async () => {
-    const imgUrl = (video.backdrop_url || video.thumbnail_url).startsWith('http') 
-      ? video.backdrop_url || video.thumbnail_url 
-      : `${API_BASE}${video.backdrop_url || video.thumbnail_url}`
-    const color = await getDominantColor(imgUrl)
-    currentAmbientColor.value = color
-  }, 100)
+  colorDebounce = setTimeout(() => {
+    if (video.dominant_color) {
+      currentAmbientColor.value = video.dominant_color
+    }
+  }, 50)
 }
 
 const ambientStyles = computed(() => ({
@@ -498,6 +484,12 @@ const handleKeydown = (e) => {
         }
       }
       break
+  }
+
+  // Update Ambilight based on new selection
+  if (focusedRowIndex.value !== -1 && focusedItemIndex.value !== -1) {
+    const video = visibleRows.value[focusedRowIndex.value].videos[focusedItemIndex.value]
+    if (video) handleHover(video)
   }
 }
 
@@ -662,7 +654,7 @@ const seriesHeroStyle = computed(() => {
   const imgUrl = selectedSeries.value.backdrop_url || selectedSeries.value.thumbnail_url
   if (!imgUrl) return {}
   return {
-    backgroundImage: `linear-gradient(to top, var(--bg-dark), transparent), url(${API_BASE}${imgUrl})`
+    backgroundImage: `linear-gradient(to top, var(--bg-dark), transparent), url(${getImageUrl(imgUrl)})`
   }
 })
 

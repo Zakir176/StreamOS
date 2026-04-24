@@ -23,6 +23,8 @@ class Series(Base):
     director = Column(String, nullable=True)
     trailer_url = Column(String, nullable=True)
     backdrop_path = Column(String, nullable=True)
+    dominant_color = Column(String, nullable=True)
+    thumbnail_placeholder = Column(String, nullable=True) # Base64 tiny image
 
 class Video(Base):
     __tablename__ = "videos"
@@ -44,6 +46,8 @@ class Video(Base):
     trailer_url = Column(String, nullable=True)
     duration = Column(Integer, nullable=True) # duration in seconds
     backdrop_path = Column(String, nullable=True)
+    dominant_color = Column(String, nullable=True)
+    thumbnail_placeholder = Column(String, nullable=True) # Base64 tiny image
 
 class SystemSetting(Base):
     __tablename__ = "settings"

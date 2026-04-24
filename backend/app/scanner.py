@@ -149,12 +149,23 @@ def scan_media():
                             elif not show_poster: # Priority to the first found image
                                 show_poster = os.path.relpath(p_test, media_dir)
                     
+                    # Calculate dominant color and placeholder for series
+                    series_color = None
+                    series_placeholder = None
+                    if show_poster:
+                        series_poster_path = os.path.join(media_dir, show_poster)
+                        if os.path.exists(series_poster_path):
+                            series_color = utils.get_dominant_color(series_poster_path)
+                            series_placeholder = utils.get_blur_placeholder(series_poster_path)
+
                     series = models.Series(
                         title=show_name,
                         category=category,
                         folder_category=folder_category,
                         poster_path=show_poster,
-                        description=show_desc
+                        description=show_desc,
+                        dominant_color=series_color,
+                        thumbnail_placeholder=series_placeholder
                     )
                     db.add(series)
                     db.flush()
@@ -164,7 +175,7 @@ def scan_media():
                 show_name = None
             
             # Calculate thumbnail paths
-            thumb_filename = f"{os.path.splitext(filename)[0]}.jpg"
+            thumb_filename = f"{os.path.splitext(filename)[0]}.webp"
             thumb_path = os.path.join(thumb_subdir, thumb_filename)
             rel_thumb_path = os.path.join(category, thumb_filename)
             
@@ -176,11 +187,19 @@ def scan_media():
                 (models.Video.filepath == video_path) | (models.Video.filepath == rel_video_path)
             ).first()
             
+            dominant_color = None
+            thumbnail_placeholder = None
             if not existing_video:
                 # Generate thumbnail only if local poster is missing
                 if not local_poster_rel:
                     utils.generate_thumbnail(video_path, thumb_path)
                 
+                # Calculate dominant color and placeholder
+                asset_for_color = local_assets["poster"] or thumb_path
+                if os.path.exists(asset_for_color):
+                    dominant_color = utils.get_dominant_color(asset_for_color)
+                    thumbnail_placeholder = utils.get_blur_placeholder(asset_for_color)
+
                 new_video = models.Video(
                     title=title,
                     filepath=rel_video_path,
@@ -196,7 +215,9 @@ def scan_media():
                     description=description,
                     cast=cast,
                     director=director,
-                    folder_category=folder_category
+                    folder_category=folder_category,
+                    dominant_color=dominant_color,
+                    thumbnail_placeholder=thumbnail_placeholder
                 )
                 db.add(new_video)
                 added_count += 1
@@ -221,6 +242,13 @@ def scan_media():
                 
                 if not local_poster_rel and not os.path.exists(thumb_path):
                     utils.generate_thumbnail(video_path, thumb_path)
+                
+                # Update dominant color and placeholder if missing
+                if not existing_video.dominant_color or not existing_video.thumbnail_placeholder:
+                    asset_for_color = local_assets["poster"] or thumb_path
+                    if os.path.exists(asset_for_color):
+                        existing_video.dominant_color = existing_video.dominant_color or utils.get_dominant_color(asset_for_color)
+                        existing_video.thumbnail_placeholder = existing_video.thumbnail_placeholder or utils.get_blur_placeholder(asset_for_color)
                 
                 updated_count += 1
     
