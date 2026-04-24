@@ -1,13 +1,45 @@
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse, Response, JSONResponse
 import requests
+from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from . import models, crud, schemas, scanner, tmdb, config, utils
 from .database import engine, SessionLocal
 import os
+from PIL import Image
+import io
 
 app = FastAPI(title="StreamOS Backend")
+
+def get_resized_image(image_path, width: Optional[int] = None, height: Optional[int] = None):
+    """Resize image on the fly and return a Response."""
+    if not os.path.exists(image_path):
+        return None
+    
+    if not width and not height:
+        return FileResponse(image_path)
+        
+    try:
+        img = Image.open(image_path)
+        orig_w, orig_h = img.size
+        
+        if width and height:
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+        elif width:
+            new_h = int((width / orig_w) * orig_h)
+            img = img.resize((width, new_h), Image.Resampling.LANCZOS)
+        elif height:
+            new_w = int((height / orig_h) * orig_w)
+            img = img.resize((new_w, height), Image.Resampling.LANCZOS)
+            
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format="WEBP", quality=80)
+        img_byte_arr.seek(0)
+        return Response(content=img_byte_arr.getvalue(), media_type="image/webp")
+    except Exception as e:
+        print(f"Error resizing image: {e}")
+        return FileResponse(image_path)
 
 @app.on_event("startup")
 async def startup_event():
@@ -215,7 +247,9 @@ def library(profile_id: int, db: Session = Depends(get_db)):
                 "thumbnail_url": thumb_url,
                 "backdrop_url": f"/thumbnail/backdrop/series/{s.id}?profile_id={profile_id}" if s.backdrop_path else None,
                 "type": "show",
-                "episodes_count": db.query(models.Video).filter(models.Video.series_id == s.id).count()
+                "episodes_count": db.query(models.Video).filter(models.Video.series_id == s.id).count(),
+                "dominant_color": s.dominant_color or (first_ep.dominant_color if first_ep else None),
+                "thumbnail_placeholder": s.thumbnail_placeholder or (first_ep.thumbnail_placeholder if first_ep else None)
             })
         return results
 
@@ -227,7 +261,9 @@ def library(profile_id: int, db: Session = Depends(get_db)):
                 "thumbnail_url": f"/thumbnail/{v.id}?profile_id={profile_id}",
                 "backdrop_url": f"/thumbnail/backdrop/{v.id}?profile_id={profile_id}" if v.backdrop_path else None,
                 "type": v.type,
-                "release_year": v.release_year
+                "release_year": v.release_year,
+                "dominant_color": v.dominant_color,
+                "thumbnail_placeholder": v.thumbnail_placeholder
             } 
             for v in movies
         ],
@@ -245,7 +281,9 @@ def library(profile_id: int, db: Session = Depends(get_db)):
                 "folder_category": item["video"].folder_category,
                 "backdrop_url": f"/thumbnail/backdrop/{item['video'].id}?profile_id={profile_id}" if item["video"].backdrop_path else None,
                 "current_time": item["current_time"],
-                "duration": item["duration"]
+                "duration": item["duration"],
+                "dominant_color": item["video"].dominant_color,
+                "thumbnail_placeholder": item["video"].thumbnail_placeholder
             }
             for item in crud.get_continue_watching(db, profile_id)
         ],
@@ -261,7 +299,9 @@ def library(profile_id: int, db: Session = Depends(get_db)):
                 "type": v.type,
                 "folder_category": v.folder_category,
                 "duration": v.duration,
-                "current_time": crud.get_watch_progress(db, profile_id, v.id)
+                "current_time": crud.get_watch_progress(db, profile_id, v.id),
+                "dominant_color": v.dominant_color,
+                "thumbnail_placeholder": v.thumbnail_placeholder
             } 
             for v in videos
             if not is_ignored(v)
@@ -308,6 +348,8 @@ def get_series_detail(series_id: int, profile_id: int, db: Session = Depends(get
         "cast": series.cast,
         "director": series.director,
         "trailer_url": series.trailer_url,
+        "dominant_color": series.dominant_color,
+        "thumbnail_placeholder": series.thumbnail_placeholder,
         "thumbnail_url": f"/thumbnail/series/{series.id}?profile_id={profile_id}" if series.poster_path else None,
         "backdrop_url": f"/thumbnail/backdrop/series/{series.id}?profile_id={profile_id}" if series.backdrop_path else None,
         "episodes": [
@@ -323,7 +365,7 @@ def get_series_detail(series_id: int, profile_id: int, db: Session = Depends(get
     }
 
 @app.get("/thumbnail/series/{series_id}")
-def get_series_thumbnail(series_id: int, profile_id: int, db: Session = Depends(get_db)):
+def get_series_thumbnail(series_id: int, profile_id: int, w: Optional[int] = None, h: Optional[int] = None, db: Session = Depends(get_db)):
     profile = crud.get_profile(db, profile_id)
     series = crud.get_series(db, series_id)
     
@@ -338,24 +380,22 @@ def get_series_thumbnail(series_id: int, profile_id: int, db: Session = Depends(
          raise HTTPException(status_code=404, detail="Poster not found")
     
     if series.poster_path.startswith("http"):
-        try:
-            resp = requests.get(series.poster_path, stream=True, timeout=5)
-            return StreamingResponse(resp.iter_content(chunk_size=1024), media_type=resp.headers.get("Content-Type", "image/jpeg"))
-        except:
-             return FileResponse(os.path.join(config.STATIC_DIR, "default_poster.jpg"))
+        return RedirectResponse(series.poster_path)
     
     # Resolve relative path
     # 1. Try THUMBNAIL_DIR
     path1 = os.path.join(config.THUMBNAIL_DIR, series.poster_path)
     if os.path.exists(path1):
-        return FileResponse(path1, media_type="image/jpeg")
+        res = get_resized_image(path1, w, h)
+        if res: return res
         
     # 2. Try MEDIA_DIR (local posters)
     media_dir_setting = crud.get_setting(db, "media_dir")
     media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
     path2 = os.path.join(media_base, series.poster_path)
     if os.path.exists(path2):
-        return FileResponse(path2, media_type="image/jpeg")
+        res = get_resized_image(path2, w, h)
+        if res: return res
         
     raise HTTPException(status_code=404, detail="Poster not found on disk")
 
@@ -382,7 +422,7 @@ def stream_video(video_id: int, profile_id: int, db: Session = Depends(get_db)):
     return FileResponse(full_path, media_type="video/mp4", filename=video.title)
 
 @app.get("/thumbnail/{video_id}")
-def get_thumbnail(video_id: int, profile_id: int, db: Session = Depends(get_db)):
+def get_thumbnail(video_id: int, profile_id: int, w: Optional[int] = None, h: Optional[int] = None, db: Session = Depends(get_db)):
     profile = crud.get_profile(db, profile_id)
     video = crud.get_video(db, video_id)
     
@@ -391,36 +431,33 @@ def get_thumbnail(video_id: int, profile_id: int, db: Session = Depends(get_db))
         
     allowed = crud.get_allowed_categories(profile.age_category)
     if video.category not in allowed:
-        raise HTTPException(status_code=403, detail="Access denied for this profile category")
+        raise HTTPException(status_code=403, detail="Access denied")
     
     if not video.thumbnail_path:
          raise HTTPException(status_code=404, detail="Thumbnail not found")
 
     if video.thumbnail_path.startswith("http"):
-        try:
-            resp = requests.get(video.thumbnail_path, stream=True, timeout=5)
-            return StreamingResponse(resp.iter_content(chunk_size=1024), media_type=resp.headers.get("Content-Type", "image/jpeg"))
-        except:
-             return FileResponse(os.path.join(config.STATIC_DIR, "default_poster.jpg"))
-    
+        return RedirectResponse(video.thumbnail_path)
+
     # Resolve relative path
     # 1. Try THUMBNAIL_DIR (generated thumbs)
     thumb_path = os.path.join(config.THUMBNAIL_DIR, video.thumbnail_path)
     if os.path.exists(thumb_path):
-        return FileResponse(thumb_path, media_type="image/jpeg")
+        res = get_resized_image(thumb_path, w, h)
+        if res: return res
         
     # 2. Try MEDIA_DIR (local posters)
     media_dir_setting = crud.get_setting(db, "media_dir")
     media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
     media_path = os.path.join(media_base, video.thumbnail_path)
     if os.path.exists(media_path):
-        return FileResponse(media_path, media_type="image/jpeg")
+        res = get_resized_image(media_path, w, h)
+        if res: return res
     
-    # 3. Fallback
     return FileResponse(os.path.join(config.STATIC_DIR, "default_poster.jpg"))
 
 @app.get("/thumbnail/backdrop/{video_id}")
-def get_video_backdrop(video_id: int, profile_id: int, db: Session = Depends(get_db)):
+def get_video_backdrop(video_id: int, profile_id: int, w: Optional[int] = None, h: Optional[int] = None, db: Session = Depends(get_db)):
     profile = crud.get_profile(db, profile_id)
     video = crud.get_video(db, video_id)
     
@@ -432,36 +469,27 @@ def get_video_backdrop(video_id: int, profile_id: int, db: Session = Depends(get
 
     if video.backdrop_path:
         if video.backdrop_path.startswith("http"):
-            try:
-                resp = requests.get(video.backdrop_path, stream=True, timeout=5)
-                return StreamingResponse(resp.iter_content(chunk_size=1024), media_type=resp.headers.get("Content-Type", "image/jpeg"))
-            except: pass
-
+            return RedirectResponse(video.backdrop_path)
+            
         # 1. Try THUMBNAIL_DIR
         path1 = os.path.join(config.THUMBNAIL_DIR, video.backdrop_path)
         if os.path.exists(path1):
-            return FileResponse(path1)
+            res = get_resized_image(path1, w, h)
+            if res: return res
             
         # 2. Try MEDIA_DIR
         media_dir_setting = crud.get_setting(db, "media_dir")
         media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
         path2 = os.path.join(media_base, video.backdrop_path)
         if os.path.exists(path2):
-            return FileResponse(path2)
+            res = get_resized_image(path2, w, h)
+            if res: return res
             
     # Fallback to poster
-    if video.thumbnail_path:
-        # Try both dirs for poster too
-        path1 = os.path.join(config.THUMBNAIL_DIR, video.thumbnail_path)
-        if os.path.exists(path1): return FileResponse(path1)
-        
-        media_dir_setting = crud.get_setting(db, "media_dir")
-        media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
-        path2 = os.path.join(media_base, video.thumbnail_path)
-        if os.path.exists(path2): return FileResponse(path2)
-            
+    return get_thumbnail(video_id, profile_id, w, h, db)
+
 @app.get("/thumbnail/backdrop/series/{series_id}")
-def get_series_backdrop(series_id: int, profile_id: int, db: Session = Depends(get_db)):
+def get_series_backdrop(series_id: int, profile_id: int, w: Optional[int] = None, h: Optional[int] = None, db: Session = Depends(get_db)):
     profile = crud.get_profile(db, profile_id)
     series = crud.get_series(db, series_id)
     
@@ -473,47 +501,48 @@ def get_series_backdrop(series_id: int, profile_id: int, db: Session = Depends(g
 
     if series.backdrop_path:
         if series.backdrop_path.startswith("http"):
-            try:
-                resp = requests.get(series.backdrop_path, stream=True, timeout=5)
-                return StreamingResponse(resp.iter_content(chunk_size=1024), media_type=resp.headers.get("Content-Type", "image/jpeg"))
-            except: pass
-
+            return RedirectResponse(series.backdrop_path)
+            
         # 1. Try THUMBNAIL_DIR
         path1 = os.path.join(config.THUMBNAIL_DIR, series.backdrop_path)
         if os.path.exists(path1):
-            return FileResponse(path1)
+            res = get_resized_image(path1, w, h)
+            if res: return res
             
         # 2. Try MEDIA_DIR
         media_dir_setting = crud.get_setting(db, "media_dir")
         media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
         path2 = os.path.join(media_base, series.backdrop_path)
         if os.path.exists(path2):
-            return FileResponse(path2)
+            res = get_resized_image(path2, w, h)
+            if res: return res
             
     raise HTTPException(status_code=404, detail="Backdrop not found")
 
-@app.get("/video/{video_id}/scrub/{timestamp}")
-def get_video_scrub(video_id: int, timestamp: int, db: Session = Depends(get_db)):
+@app.get("/video/{video_id}/scrub")
+def get_video_scrub_sheet(video_id: int, db: Session = Depends(get_db)):
+    """Return the sprite sheet for scrubbing."""
     video = crud.get_video(db, video_id)
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    # We assume 10s intervals
-    interval = 10
-    index = (timestamp // interval) + 1
-    filename = f"thumb_{index:05d}.jpg"
-    
-    scrub_dir = os.path.join(config.THUMBNAIL_DIR, "scrub", str(video_id))
-    full_path = os.path.join(scrub_dir, filename)
-    
-    if not os.path.exists(full_path):
-        # Fallback to standard thumbnail
-        std_thumb = os.path.join(config.THUMBNAIL_DIR, video.thumbnail_path)
-        if os.path.exists(std_thumb):
-            return FileResponse(std_thumb, media_type="image/jpeg")
-        raise HTTPException(status_code=404, detail="Scrub thumbnail not found")
+    sheet_path = os.path.join(config.THUMBNAIL_DIR, "scrub", f"{video_id}_sprite.webp")
+    if not os.path.exists(sheet_path):
+        # Return a simple JSON indicating it's not ready
+        return JSONResponse(status_code=404, content={"message": "Sprite sheet not generated yet"})
         
-    return FileResponse(full_path, media_type="image/jpeg")
+    return FileResponse(sheet_path, media_type="image/webp")
+
+@app.get("/video/{video_id}/scrub-info")
+def get_video_scrub_info(video_id: int, db: Session = Depends(get_db)):
+    """Return metadata for the sprite sheet."""
+    # For now, we use a fixed config, but we could store this in the DB
+    return {
+        "interval": 10,
+        "cols": 10,
+        "fw": 160,
+        "fh": 90 # approximate
+    }
 
 @app.post("/video/{video_id}/generate-scrub")
 def generate_video_scrub(video_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
@@ -521,8 +550,12 @@ def generate_video_scrub(video_id: int, background_tasks: BackgroundTasks, db: S
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
-    video_abs_path = os.path.join(config.MEDIA_DIR, video.filepath)
-    scrub_dir = os.path.join(config.THUMBNAIL_DIR, "scrub", str(video_id))
+    media_dir_setting = crud.get_setting(db, "media_dir")
+    media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
+    video_abs_path = os.path.join(media_base, video.filepath)
     
-    background_tasks.add_task(utils.generate_scrub_thumbnails, video_abs_path, scrub_dir)
-    return {"message": "Scrub generation started in background"}
+    scrub_path = os.path.join(config.THUMBNAIL_DIR, "scrub", f"{video_id}_sprite.webp")
+    os.makedirs(os.path.dirname(scrub_path), exist_ok=True)
+    
+    background_tasks.add_task(utils.generate_sprite_sheet, video_abs_path, scrub_path)
+    return {"message": "Sprite sheet generation started in background"}
