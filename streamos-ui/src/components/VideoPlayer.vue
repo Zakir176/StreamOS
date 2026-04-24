@@ -60,7 +60,12 @@
             :style="{ left: hoverPercent + '%' }"
           >
             <div class="scrub-glass-card">
-              <img :src="scrubThumbnailUrl" class="scrub-img" @error="handleScrubError" />
+              <div 
+                v-if="scrubInfo"
+                class="scrub-sprite" 
+                :style="scrubSpriteStyle"
+              ></div>
+              <div v-else class="scrub-placeholder">Loading...</div>
               <div class="scrub-timestamp">{{ formatTime((hoverPercent / 100) * duration) }}</div>
             </div>
           </div>
@@ -143,7 +148,7 @@
         <h3>Up Next</h3>
         <h2 class="next-title">{{ nextEpisode?.title }}</h2>
         <div class="next-thumb">
-          <img v-if="nextEpisode?.thumbnail_url" :src="`${API_BASE}${nextEpisode.thumbnail_url}?profile_id=${profileId}`" :alt="nextEpisode.title" />
+          <img v-if="nextEpisode?.thumbnail_url" :src="getImageUrl(nextEpisode.thumbnail_url, 400)" :alt="nextEpisode.title" />
           <div class="countdown-circle">{{ countdown }}</div>
         </div>
         <div class="up-next-actions">
@@ -175,6 +180,19 @@ const emit = defineEmits(['close', 'play-next'])
 const profileId = ref(localStorage.getItem('profile_id'))
 const API_BASE = import.meta.env.VITE_API_BASE
 
+const getImageUrl = (url, width) => {
+  if (!url) return ''
+  const baseUrl = url.startsWith('http') ? url : `${API_BASE}${url}`
+  const separator = baseUrl.includes('?') ? '&' : '?'
+  let finalUrl = width ? `${baseUrl}${separator}w=${width}` : baseUrl
+  // Add profile_id for local paths if needed
+  if (!url.startsWith('http')) {
+      const sep = finalUrl.includes('?') ? '&' : '?'
+      finalUrl = `${finalUrl}${sep}profile_id=${profileId.value}`
+  }
+  return finalUrl
+}
+
 const playerContainerRef = ref(null)
 const videoRef = ref(null)
 const isPlaying = ref(true)
@@ -183,7 +201,8 @@ const savedTime = ref(0) // Safe storage for the initial resume timestamp
 const duration = ref(0)
 const progressPercent = ref(0)
 const hoverPercent = ref(null)
-const scrubThumbnailUrl = ref('')
+const scrubInfo = ref(null)
+const currentScrubIndex = ref(0)
 const volume = ref(1)
 const isMuted = ref(false)
 const isFullscreen = ref(false)
@@ -270,11 +289,10 @@ const handleProgressHover = (e) => {
   const pos = (e.clientX - rect.left) / rect.width
   hoverPercent.value = pos * 100
   
-  // Calculate scrub thumbnail
-  const hoverTime = pos * duration.value
-  const interval = 10
-  const syncTime = Math.floor(hoverTime / interval) * interval
-  scrubThumbnailUrl.value = `${API_BASE}/video/${props.videoId}/scrub/${syncTime}`
+  if (scrubInfo.value) {
+    const hoverTime = pos * duration.value
+    currentScrubIndex.value = Math.floor(hoverTime / scrubInfo.value.interval)
+  }
 }
 
 const handleScrubError = (e) => {
@@ -433,10 +451,57 @@ const triggerScrubGeneration = async () => {
   }
 }
 
+const handlePlayerKeydown = (e) => {
+  if (showUpNext.value) return 
+
+  switch (e.key) {
+    case ' ':
+    case 'k':
+      e.preventDefault()
+      togglePlay()
+      break
+    case 'ArrowRight':
+    case 'l':
+      e.preventDefault()
+      skip(10)
+      break
+    case 'ArrowLeft':
+    case 'j':
+      e.preventDefault()
+      skip(-10)
+      break
+    case 'f':
+      e.preventDefault()
+      toggleFullscreen()
+      break
+    case 'm':
+      e.preventDefault()
+      toggleMute()
+      break
+    case 'Escape':
+      e.preventDefault()
+      emit('close')
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      volume.value = Math.min(1, volume.value + 0.1)
+      setVolume()
+      break
+    case 'ArrowDown':
+      e.preventDefault()
+      volume.value = Math.max(0, volume.value - 0.1)
+      setVolume()
+      break
+  }
+  handleUserActivity()
+}
+
 onMounted(() => {
   fetchInitialProgress()
   fetchNextEpisode()
+  fetchScrubInfo()
   triggerScrubGeneration()
+  window.addEventListener('keydown', handlePlayerKeydown)
   
   if (videoRef.value) {
     videoRef.value.play().catch(err => console.warn('Autoplay failed:', err))
@@ -449,6 +514,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', handlePlayerKeydown)
   syncProgress() // Final sync before unmount
   clearTimeout(hideTimer)
   clearInterval(syncTimer)
@@ -704,11 +770,19 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.scrub-img {
-  width: 220px;
-  aspect-ratio: 16/9;
+.scrub-sprite {
   border-radius: 8px;
-  object-fit: cover;
+  background-repeat: no-repeat;
+}
+
+.scrub-placeholder {
+  width: 160px;
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  font-size: 0.8rem;
 }
 
 .scrub-timestamp {
