@@ -27,9 +27,9 @@
           @mouseenter="emit('hover', video)"
         >
           <div class="video-card-inner">
-            <div class="thumbnail-wrapper">
+            <div class="thumbnail-wrapper" :style="{ backgroundImage: video.thumbnail_placeholder ? `url(data:image/webp;base64,${video.thumbnail_placeholder})` : 'none' }">
               <img 
-                :src="`${API_BASE}${video.backdrop_url || video.thumbnail_url}`" 
+                :src="getImageUrl(video.backdrop_url || video.thumbnail_url, 400)" 
                 :alt="video.title"
                 class="thumbnail"
                 @error="onImgError"
@@ -99,6 +99,13 @@
 import { ref } from 'vue'
 
 const API_BASE = import.meta.env.VITE_API_BASE
+
+const getImageUrl = (url, width) => {
+  if (!url) return ''
+  const baseUrl = url.startsWith('http') ? url : `${API_BASE}${url}`
+  const separator = baseUrl.includes('?') ? '&' : '?'
+  return width ? `${baseUrl}${separator}w=${width}` : baseUrl
+}
 
 const props = defineProps({
   title: String,
@@ -266,7 +273,9 @@ watch(() => props.focusedIndex, async (newIndex) => {
   aspect-ratio: 16/9;
   border-radius: var(--radius-main);
   overflow: hidden;
-  background: #1a1a1a;
+  background-color: #1a1a1a;
+  background-size: cover;
+  background-position: center;
   box-shadow: 0 4px 6px rgba(0,0,0,0.3);
   transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
