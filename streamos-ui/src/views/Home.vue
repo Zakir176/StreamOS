@@ -48,6 +48,9 @@ const selectProfile = (profile) => {
   localStorage.setItem('profile_id', profile.id)
   localStorage.setItem('profile_name', profile.username)
   localStorage.setItem('profile_category', profile.age_category)
+  const theme = profile.theme || 'midnight'
+  localStorage.setItem('profile_theme', theme)
+  document.documentElement.setAttribute('data-theme', theme)
   router.push('/library')
 }
 </script>
