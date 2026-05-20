@@ -1,4 +1,3 @@
-<<<<
 <template>
   <div class="video-player" ref="playerContainerRef" @mousemove="handleUserActivity" :class="{ 'ui-hidden': isUiHidden }">
     <!-- Top Bar for Back Button and Title -->
@@ -167,7 +166,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 
 const props = defineProps({
   videoSrc: String,
@@ -417,6 +416,39 @@ const fetchNextEpisode = async () => {
     console.error('Failed to fetch next episode:', err)
   }
 }
+
+const fetchScrubInfo = async () => {
+  if (!props.videoId) return
+  try {
+    const res = await fetch(`${API_BASE}/video/${props.videoId}/scrub-info`)
+    if (res.ok) {
+      scrubInfo.value = await res.json()
+    }
+  } catch (err) {
+    console.error('Failed to fetch scrub info:', err)
+  }
+}
+
+const scrubSpriteStyle = computed(() => {
+  if (!scrubInfo.value) return {}
+  const cols = scrubInfo.value.cols || 10
+  const fw = scrubInfo.value.fw || 160
+  const fh = scrubInfo.value.fh || 90
+  const index = currentScrubIndex.value
+  
+  const col = index % cols
+  const row = Math.floor(index / cols)
+  
+  const x = -col * fw
+  const y = -row * fh
+  
+  return {
+    backgroundImage: `url(${API_BASE}/video/${props.videoId}/scrub)`,
+    backgroundPosition: `${x}px ${y}px`,
+    width: `${fw}px`,
+    height: `${fh}px`
+  }
+})
 
 const handleVideoEnded = () => {
   isPlaying.value = false
