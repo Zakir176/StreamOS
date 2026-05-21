@@ -40,6 +40,8 @@ class VideoBase(BaseModel):
     backdrop_url: Optional[str] = None
     current_time: Optional[int] = None
     duration: Optional[int] = None
+    dominant_color: Optional[str] = None
+    thumbnail_placeholder: Optional[str] = None
 
 class VideoDetail(VideoBase):
     filepath: str
