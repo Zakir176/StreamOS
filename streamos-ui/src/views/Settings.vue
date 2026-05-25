@@ -36,6 +36,7 @@
 
       <div class="system-settings-section glass">
         <h2 class="section-title">Library Settings</h2>
+        
         <div class="setting-item">
           <label>Media Library Path</label>
           <div class="path-input-group">
@@ -43,6 +44,15 @@
             <button @click="saveMediaDir" class="save-btn small">Save Path</button>
           </div>
           <p class="setting-hint">This is where StreamOS will look for video files.</p>
+        </div>
+
+        <div class="setting-item">
+          <label>TMDB API Key</label>
+          <div class="path-input-group">
+            <input v-model="tmdbApiKey" type="password" placeholder="Enter TMDB API Key" class="settings-input glass" />
+            <button @click="saveTmdbKey" class="save-btn small">Save Key</button>
+          </div>
+          <p class="setting-hint">Used to fetch movie and TV show metadata from TheMovieDB.</p>
         </div>
         
         <div class="setting-actions">
@@ -151,15 +161,25 @@ const profiles = ref([])
 const showAddModal = ref(false)
 const newProfile = ref({ username: '', age_category: 'adult', theme: 'midnight' })
 const mediaDir = ref('')
+const tmdbApiKey = ref('')
 const scanning = ref(false)
-const API_BASE = import.meta.env.VITE_API_BASE
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8000`
 
 const fetchSettings = async () => {
   try {
-    const res = await fetch(`${API_BASE}/settings/media_dir`)
-    if (res.ok) {
-      const data = await res.json()
+    const [mediaRes, tmdbRes] = await Promise.all([
+      fetch(`${API_BASE}/settings/media_dir`),
+      fetch(`${API_BASE}/settings/tmdb_api_key`)
+    ])
+    
+    if (mediaRes.ok) {
+      const data = await mediaRes.json()
       mediaDir.value = data.value
+    }
+    
+    if (tmdbRes.ok) {
+      const data = await tmdbRes.json()
+      tmdbApiKey.value = data.value
     }
   } catch (err) {
     console.error('Fetch settings failed:', err)
@@ -179,6 +199,23 @@ const saveMediaDir = async () => {
   } catch (err) {
     console.error('Save media path failed:', err)
     alert('Failed to save media path.')
+  }
+}
+
+const saveTmdbKey = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: 'tmdb_api_key', value: tmdbApiKey.value })
+    })
+    if (res.ok) {
+      alert('TMDB API Key saved successfully!')
+      fetchSettings() // Refresh to show masked version
+    }
+  } catch (err) {
+    console.error('Save TMDB Key failed:', err)
+    alert('Failed to save TMDB API Key.')
   }
 }
 
