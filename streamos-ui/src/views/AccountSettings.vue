@@ -95,7 +95,7 @@ const tmdbKey = ref('')
 const scanning = ref(false)
 const scraping = ref(false)
 const offlineMode = ref(false)
-const API_BASE = import.meta.env.VITE_API_BASE
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8000`
 
 const fetchSettings = async () => {
   try {
