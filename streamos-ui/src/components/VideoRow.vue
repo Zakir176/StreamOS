@@ -98,7 +98,7 @@
 <script setup>
 import { ref } from 'vue'
 
-const API_BASE = import.meta.env.VITE_API_BASE
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8000`
 
 const getImageUrl = (url, width) => {
   if (!url) return ''
