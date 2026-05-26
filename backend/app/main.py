@@ -48,10 +48,21 @@ async def startup_event():
     scanner.scan_media()
 
 # CORS setup
+# In production, this should be restricted to the actual frontend domain.
+# We'll allow localhost and the local network IP for development.
+local_ip = utils.get_local_ip()
+default_origins = [
+    "http://localhost:5173", 
+    "http://127.0.0.1:5173",
+    f"http://{local_ip}:5173"
+]
+env_origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
+allowed_origins = [o for o in (default_origins + env_origins) if o]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -66,6 +77,12 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def validate_path(base_dir, path):
+    """Ensure the path is safe and within the base directory."""
+    if not utils.is_safe_path(base_dir, path):
+        raise HTTPException(status_code=400, detail="Invalid path or path traversal attempt detected")
+    return path
 
 # Endpoints
 @app.get("/profiles", response_model=list[schemas.Profile])
@@ -82,17 +99,39 @@ def trigger_scan():
 
 @app.get("/settings", response_model=list[schemas.SystemSetting])
 def get_settings(db: Session = Depends(get_db)):
-    return crud.get_settings(db)
+    settings = crud.get_settings(db)
+    # Mask sensitive keys
+    for s in settings:
+        if s.key == "tmdb_api_key" and s.value:
+            s.value = "********" + s.value[-4:] if len(s.value) > 4 else "********"
+    return settings
 
 @app.get("/settings/{key}", response_model=schemas.SystemSetting)
 def get_setting(key: str, db: Session = Depends(get_db)):
     setting = crud.get_setting(db, key)
     if not setting:
         raise HTTPException(status_code=404, detail="Setting not found")
+    
+    # Mask sensitive keys
+    if key == "tmdb_api_key" and setting.value:
+        # Create a copy or modify the object in a way that doesn't affect the DB session if possible,
+        # but for simplicity and since we return it, we'll just mask the value.
+        # Note: SQLAlchemy objects are tracked, so we should be careful. 
+        # Using a dict or a pydantic model for the return is safer.
+        return schemas.SystemSetting(
+            key=setting.key, 
+            value="********" + setting.value[-4:] if len(setting.value) > 4 else "********"
+        )
     return setting
 
 @app.post("/settings", response_model=schemas.SystemSetting)
 def set_setting(setting: schemas.SystemSettingBase, db: Session = Depends(get_db)):
+    # If it's the TMDB key and it's masked, don't update it
+    if setting.key == "tmdb_api_key" and setting.value.startswith("********"):
+        existing = crud.get_setting(db, setting.key)
+        if existing:
+            return existing
+    
     return crud.set_setting(db, setting.key, setting.value)
 
 @app.get("/profile/{profile_id}", response_model=schemas.Profile)
@@ -386,6 +425,7 @@ def get_series_thumbnail(series_id: int, profile_id: int, w: Optional[int] = Non
     # 1. Try THUMBNAIL_DIR
     path1 = os.path.join(config.THUMBNAIL_DIR, series.poster_path)
     if os.path.exists(path1):
+        validate_path(config.THUMBNAIL_DIR, path1)
         res = get_resized_image(path1, w, h)
         if res: return res
         
@@ -394,6 +434,7 @@ def get_series_thumbnail(series_id: int, profile_id: int, w: Optional[int] = Non
     media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
     path2 = os.path.join(media_base, series.poster_path)
     if os.path.exists(path2):
+        validate_path(media_base, path2)
         res = get_resized_image(path2, w, h)
         if res: return res
         
@@ -412,10 +453,13 @@ def stream_video(video_id: int, profile_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Access denied for this profile category")
 
     full_path = video.filepath
+    media_dir_setting = crud.get_setting(db, "media_dir")
+    media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
+    
     if not os.path.isabs(full_path):
-        media_dir_setting = crud.get_setting(db, "media_dir")
-        media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
         full_path = os.path.join(media_base, video.filepath)
+
+    validate_path(media_base, full_path)
 
     if not os.path.exists(full_path):
          raise HTTPException(status_code=404, detail="Video file not found on disk")
@@ -443,6 +487,7 @@ def get_thumbnail(video_id: int, profile_id: int, w: Optional[int] = None, h: Op
     # 1. Try THUMBNAIL_DIR (generated thumbs)
     thumb_path = os.path.join(config.THUMBNAIL_DIR, video.thumbnail_path)
     if os.path.exists(thumb_path):
+        validate_path(config.THUMBNAIL_DIR, thumb_path)
         res = get_resized_image(thumb_path, w, h)
         if res: return res
         
@@ -451,6 +496,7 @@ def get_thumbnail(video_id: int, profile_id: int, w: Optional[int] = None, h: Op
     media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
     media_path = os.path.join(media_base, video.thumbnail_path)
     if os.path.exists(media_path):
+        validate_path(media_base, media_path)
         res = get_resized_image(media_path, w, h)
         if res: return res
     
@@ -474,6 +520,7 @@ def get_video_backdrop(video_id: int, profile_id: int, w: Optional[int] = None, 
         # 1. Try THUMBNAIL_DIR
         path1 = os.path.join(config.THUMBNAIL_DIR, video.backdrop_path)
         if os.path.exists(path1):
+            validate_path(config.THUMBNAIL_DIR, path1)
             res = get_resized_image(path1, w, h)
             if res: return res
             
@@ -482,6 +529,7 @@ def get_video_backdrop(video_id: int, profile_id: int, w: Optional[int] = None, 
         media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
         path2 = os.path.join(media_base, video.backdrop_path)
         if os.path.exists(path2):
+            validate_path(media_base, path2)
             res = get_resized_image(path2, w, h)
             if res: return res
             
@@ -506,6 +554,7 @@ def get_series_backdrop(series_id: int, profile_id: int, w: Optional[int] = None
         # 1. Try THUMBNAIL_DIR
         path1 = os.path.join(config.THUMBNAIL_DIR, series.backdrop_path)
         if os.path.exists(path1):
+            validate_path(config.THUMBNAIL_DIR, path1)
             res = get_resized_image(path1, w, h)
             if res: return res
             
@@ -514,6 +563,7 @@ def get_series_backdrop(series_id: int, profile_id: int, w: Optional[int] = None
         media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
         path2 = os.path.join(media_base, series.backdrop_path)
         if os.path.exists(path2):
+            validate_path(media_base, path2)
             res = get_resized_image(path2, w, h)
             if res: return res
             
