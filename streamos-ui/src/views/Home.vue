@@ -31,7 +31,7 @@ import { useRouter } from 'vue-router'
 
 const router = useRouter()
 const profiles = ref([])
-const API_BASE = import.meta.env.VITE_API_BASE
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8000`
 
 const fetchProfiles = async () => {
   try {
