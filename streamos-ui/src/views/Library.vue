@@ -313,7 +313,7 @@ import VideoPlayer from '../components/VideoPlayer.vue'
 
 const router = useRouter()
 const route = useRoute()
-const API_BASE = import.meta.env.VITE_API_BASE
+const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8000`
 
 const getImageUrl = (url, width) => {
   if (!url) return ''
