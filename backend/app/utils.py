@@ -5,8 +5,41 @@ import math
 from PIL import Image, ImageStat
 import io
 import requests
+import socket
 
 import re
+
+def get_local_ip():
+    """Get the local network IP address of the machine."""
+    try:
+        # Create a dummy socket to detect the preferred outbound IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        # 8.8.8.8 is Google's DNS, doesn't actually connect
+        s.connect(('8.8.8.8', 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+def is_safe_path(base_dir, path, follow_symlinks=True):
+    """
+    Check if 'path' is safe and within 'base_dir'.
+    Prevents path traversal attacks.
+    """
+    if not path:
+        return False
+        
+    # Get absolute paths
+    if follow_symlinks:
+        base_dir = os.path.realpath(base_dir)
+        path = os.path.realpath(path)
+    else:
+        base_dir = os.path.abspath(base_dir)
+        path = os.path.abspath(path)
+        
+    return os.path.commonpath([base_dir]) == os.path.commonpath([base_dir, path])
 
 try:
     import imageio_ffmpeg
