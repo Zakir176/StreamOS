@@ -60,7 +60,8 @@ npm run dev
 
 ## 📖 Documentation
 - [User Manual](docs/UserManual.md) - How to use StreamOS.
-- [Development Guide](docs/DEVELOPMENT.md) - Architecture, API, and contribution guide.
+- [Development Guide](docs/DEVELOPMENT.md) - Architecture, API, and [Troubleshooting](docs/DEVELOPMENT.md#🛠️-troubleshooting).
+- [Design System & UI Guide](docs/uiGuide.md) - Visual language and design tokens.
 - [Media Organization Guide](docs/MEDIA_ORGANIZATION.md) - How to name and structure your files.
 
 ## 📄 License
