@@ -25,7 +25,7 @@ By participating in this project, you agree to abide by the terms of our Code of
 ### Frontend (Vue/JavaScript)
 - Use the **Composition API** for Vue components.
 - Keep components modular and reusable.
-- Follow the "Liquid Glass" design tokens in `assets/styles.css`.
+- Follow the [Design System & UI Guide](docs/uiGuide.md) for visual consistency.
 - Use descriptive variable and function names.
 
 ## 📝 Commit Messages
