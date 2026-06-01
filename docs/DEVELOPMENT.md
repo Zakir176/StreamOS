@@ -64,30 +64,79 @@ StreamOS uses a path-based categorization system for age filtering:
 
 The backend provides a RESTful API for all system operations.
 
-### Profiles
-- `GET /profiles`: List all user profiles.
-- `GET /profile/{profile_id}`: Get details for a specific profile.
-- `POST /profile/create`: Create a new profile (Name, Age Category, Theme, Avatar).
-- `PATCH /profiles/{profile_id}`: Update an existing profile.
-- `DELETE /profiles/{profile_id}`: Delete a profile and its history.
+### 🤖 Automatic Documentation
+StreamOS leverages FastAPI's automatic documentation generation. Once the backend is running, you can access interactive documentation at:
+- **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
 
-### Library & Media
-- `GET /library?profile_id={id}`: Get the personalized library view for a profile (Movies, TV Shows, Anime, Continue Watching).
-- `GET /series/{series_id}?profile_id={id}`: Get detailed series info and episode list.
-- `GET /stream/{video_id}?profile_id={id}`: Stream a video file directly.
-- `POST /scan`: Manually trigger a media library scan.
-- `POST /scrape`: Manually trigger a TMDB metadata scrape.
+### 📋 Request & Response Examples
 
-### Progress Tracking
-- `POST /progress`: Update the current watch position for a video.
-- `GET /progress/{video_id}?profile_id={id}`: Retrieve current progress for a specific video.
-- `GET /next-episode/{video_id}`: Get metadata for the next logical episode in a series.
+#### Get Profiles
+`GET /profiles`
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "username": "Zakir",
+    "age_category": "adult",
+    "avatar_url": "/public/avatars/avatar1.png",
+    "theme": "midnight"
+  }
+]
+```
 
-### Thumbnails & Artwork
-- `GET /thumbnail/{video_id}?profile_id={id}`: Fetch the poster/thumbnail for a video.
-- `GET /thumbnail/series/{series_id}?profile_id={id}`: Fetch the series-level poster.
-- `GET /thumbnail/backdrop/{video_id}?profile_id={id}`: Fetch the backdrop/fanart for a video.
-- `GET /video/{video_id}/scrub/{timestamp}`: Fetch a preview thumbnail for a specific timestamp (Video Player Scrubbing).
+#### Get Library
+`GET /library?profile_id=1`
+**Response:**
+```json
+{
+  "movies": [
+    {
+      "id": 42,
+      "title": "Inception",
+      "thumbnail_url": "http://localhost:8000/thumbnail/42",
+      "type": "movie",
+      "release_year": 2010
+    }
+  ],
+  "tv_shows": [],
+  "anime": [],
+  "continue_watching": []
+}
+```
+
+#### Update Progress
+`POST /progress`
+**Request:**
+```json
+{
+  "profile_id": 1,
+  "video_id": 42,
+  "current_time": 1250,
+  "duration": 8400
+}
+```
+
+---
+
+## 🛠️ Troubleshooting
+
+### FFmpeg Issues
+StreamOS requires FFmpeg for generating video scrub thumbnails.
+- **Error**: `FFmpeg not found` or thumbnails are not generating.
+- **Fix**: Ensure `ffmpeg` is in your system's PATH. 
+  - **Windows**: [Download from gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and add the `bin` folder to your Environment Variables.
+  - **Linux**: `sudo apt install ffmpeg`
+  - **macOS**: `brew install ffmpeg`
+
+### Database Locked
+Since StreamOS uses SQLite, the database file may occasionally become "locked" during heavy write operations (like a full library scan).
+- **Fix**: Restart the backend service. If the issue persists, ensure no other process (like a DB browser) is holding an exclusive lock on `backend/streamos.db`.
+
+### CORS Errors
+If the frontend cannot connect to the backend:
+- **Fix**: Ensure `VITE_API_BASE` in `streamos-ui/.env` matches your backend URL. If running on a non-standard IP, add it to `ALLOWED_ORIGINS` in your backend environment.
 
 ---
 
