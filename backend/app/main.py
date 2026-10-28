@@ -9,8 +9,13 @@ from .database import engine, SessionLocal
 import os
 from PIL import Image
 import io
-
-app = FastAPI(title="StreamOS Backend")
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "true").lower() in ("true", "1")
+app = FastAPI(
+    title="StreamOS Backend",
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None
+)
 
 def get_resized_image(image_path, width: Optional[int] = None, height: Optional[int] = None):
     """Resize image on the fly and return a Response."""
@@ -21,6 +26,12 @@ def get_resized_image(image_path, width: Optional[int] = None, height: Optional[
         return FileResponse(image_path)
         
     try:
+        # Clamp dimensions to prevent memory exhaustion / decompression bomb DoS
+        if width is not None:
+            width = max(16, min(int(width), 3840))
+        if height is not None:
+            height = max(16, min(int(height), 2160))
+
         img = Image.open(image_path)
         orig_w, orig_h = img.size
         
@@ -41,11 +52,14 @@ def get_resized_image(image_path, width: Optional[int] = None, height: Optional[
         print(f"Error resizing image: {e}")
         return FileResponse(image_path)
 
+import threading
+
 @app.on_event("startup")
 async def startup_event():
-    # Run scan on startup
-    print("Running initial library scan...")
-    scanner.scan_media()
+    # Run initial scan in a background thread so server starts immediately without event loop blockage
+    print("Spawning initial library scan in background thread...")
+    threading.Thread(target=scanner.scan_media, daemon=True).start()
+
 
 # CORS setup
 # In production, this should be restricted to the actual frontend domain.
@@ -67,6 +81,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if "server" in response.headers:
+        del response.headers["server"]
+    return response
+
+
 # Database setup
 models.Base.metadata.create_all(bind=engine)
 
@@ -77,6 +103,23 @@ def get_db():
         yield db
     finally:
         db.close()
+
+FORBIDDEN_FOLDER_NAMES = {
+    "windows", "winnt", "system volume information", "recovery", "perflogs",
+    "program files", "program files (x86)", "programdata", "msys64",
+    "appdata", ".ssh", ".aws", ".gemini", ".vscode", ".idea", ".git", "venv", "node_modules",
+    "etc", "var", "root", "proc", "sys", "usr", "bin", "sbin", "boot"
+}
+
+def is_forbidden_path(path: str) -> bool:
+    if not path:
+        return False
+    norm = os.path.normpath(path).lower()
+    parts = [p.strip().strip("\\/") for p in norm.split(os.sep) if p.strip()]
+    for part in parts:
+        if part in FORBIDDEN_FOLDER_NAMES or part.startswith(".") or part.startswith("$"):
+            return True
+    return False
 
 def validate_path(base_dir, path):
     """Ensure the path is safe and within the base directory."""
@@ -89,10 +132,140 @@ def validate_path(base_dir, path):
 def profiles(db: Session = Depends(get_db)):
     return crud.get_profiles(db)
 
+@app.get("/filesystem/browse")
+def browse_filesystem(path: Optional[str] = None, db: Session = Depends(get_db)):
+    import string
+    
+    current_media_setting = crud.get_setting(db, "media_dir")
+    active_media_dir = current_media_setting.value if current_media_setting else config.MEDIA_DIR
+    
+    quick_paths = []
+    if active_media_dir and os.path.exists(active_media_dir):
+        quick_paths.append({"name": "Current Library", "path": active_media_dir})
+    if os.path.exists(config.MEDIA_DIR) and (not active_media_dir or os.path.abspath(config.MEDIA_DIR) != os.path.abspath(active_media_dir)):
+        quick_paths.append({"name": "Default Media", "path": config.MEDIA_DIR})
+        
+    home_dir = os.path.expanduser("~")
+    for common_folder in ["Videos", "Movies"]:
+        p = os.path.join(home_dir, common_folder)
+        if os.path.exists(p):
+            quick_paths.append({"name": f"User {common_folder}", "path": p})
+
+    # Allow drive roots only if explicitly configured via STREAMOS_ALLOW_SYSTEM_BROWSE
+    allow_system_browse = os.getenv("STREAMOS_ALLOW_SYSTEM_BROWSE", "false").lower() in ("true", "1")
+    drives = []
+    if allow_system_browse:
+        if os.name == "nt":
+            for letter in string.ascii_uppercase:
+                drive_path = f"{letter}:\\"
+                if os.path.exists(drive_path):
+                    drives.append(drive_path)
+        else:
+            drives = ["/"]
+        for d in drives:
+            quick_paths.append({"name": f"Drive ({d})", "path": d})
+        
+    target_path = path.strip() if path else None
+    if not target_path:
+        target_path = active_media_dir if (active_media_dir and os.path.exists(active_media_dir)) else (quick_paths[0]["path"] if quick_paths else os.getcwd())
+
+    norm_path = os.path.abspath(target_path)
+    
+    # Security check: Block navigation into forbidden system directories
+    if is_forbidden_path(norm_path):
+        return {
+            "success": False,
+            "error": "Access to this system directory is restricted for security.",
+            "current_path": active_media_dir or norm_path,
+            "parent_path": None,
+            "drives": drives,
+            "quick_paths": quick_paths,
+            "directories": [],
+            "stats": {"video_count": 0, "has_media_subfolders": False}
+        }
+
+    if not os.path.exists(norm_path) or not os.path.isdir(norm_path):
+        return {
+            "success": False,
+            "error": f"Path does not exist or is not a directory: {target_path}",
+            "current_path": target_path,
+            "parent_path": None,
+            "drives": drives,
+            "quick_paths": quick_paths,
+            "directories": [],
+            "stats": {"video_count": 0, "has_media_subfolders": False}
+        }
+        
+    parent_path = os.path.dirname(norm_path)
+    if parent_path == norm_path or not parent_path or is_forbidden_path(parent_path):
+        parent_path = None
+        
+    directories = []
+    video_extensions = (".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm")
+    video_count = 0
+    has_media_subfolders = False
+    
+    try:
+        with os.scandir(norm_path) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        name = entry.name
+                        if is_forbidden_path(name) or is_forbidden_path(entry.path):
+                            continue
+                        lower = name.lower()
+                        if lower in ["movies", "tv shows", "anime", "kids", "teen", "adult"]:
+                            has_media_subfolders = True
+                        directories.append({
+                            "name": name,
+                            "path": entry.path
+                        })
+                    elif entry.is_file(follow_symlinks=False):
+                        if entry.name.lower().endswith(video_extensions):
+                            video_count += 1
+                except (PermissionError, OSError):
+                    continue
+    except (PermissionError, OSError) as e:
+        return {
+            "success": False,
+            "error": f"Permission denied accessing folder: {str(e)}",
+            "current_path": norm_path,
+            "parent_path": parent_path,
+            "drives": drives,
+            "quick_paths": quick_paths,
+            "directories": [],
+            "stats": {"video_count": 0, "has_media_subfolders": False}
+        }
+        
+    directories.sort(key=lambda d: d["name"].lower())
+    
+    return {
+        "success": True,
+        "current_path": norm_path,
+        "parent_path": parent_path,
+        "drives": drives,
+        "quick_paths": quick_paths,
+        "directories": directories,
+        "stats": {
+            "video_count": video_count,
+            "has_media_subfolders": has_media_subfolders
+        }
+    }
+
 @app.post("/scan")
-def trigger_scan():
-    result = scanner.scan_media()
-    # For backward compatibility if scan_media returns None
+def trigger_scan(req: Optional[schemas.ScanRequest] = None, db: Session = Depends(get_db)):
+    if scanner.is_scan_running():
+        return {"success": False, "message": "A library scan is already in progress. Please wait."}
+
+    custom_dir = None
+    if req and req.media_dir:
+        custom_dir = req.media_dir.strip()
+        if not os.path.exists(custom_dir) or not os.path.isdir(custom_dir):
+            raise HTTPException(status_code=400, detail=f"Media directory does not exist or is not a directory: {custom_dir}")
+        if is_forbidden_path(custom_dir):
+            raise HTTPException(status_code=403, detail="Specified media directory is a restricted system path")
+        crud.set_setting(db, "media_dir", custom_dir)
+    result = scanner.scan_media(custom_dir=custom_dir)
     if result is None:
         return {"success": True, "message": "Scan completed"}
     return result
@@ -100,24 +273,26 @@ def trigger_scan():
 @app.get("/settings", response_model=list[schemas.SystemSetting])
 def get_settings(db: Session = Depends(get_db)):
     settings = crud.get_settings(db)
-    # Mask sensitive keys
+    has_media_dir = False
     for s in settings:
+        if s.key == "media_dir":
+            has_media_dir = True
         if s.key == "tmdb_api_key" and s.value:
             s.value = "********" + s.value[-4:] if len(s.value) > 4 else "********"
+    if not has_media_dir:
+        settings.append(schemas.SystemSetting(key="media_dir", value=config.MEDIA_DIR))
     return settings
 
 @app.get("/settings/{key}", response_model=schemas.SystemSetting)
 def get_setting(key: str, db: Session = Depends(get_db)):
     setting = crud.get_setting(db, key)
     if not setting:
+        if key == "media_dir":
+            return schemas.SystemSetting(key="media_dir", value=config.MEDIA_DIR)
         raise HTTPException(status_code=404, detail="Setting not found")
     
     # Mask sensitive keys
     if key == "tmdb_api_key" and setting.value:
-        # Create a copy or modify the object in a way that doesn't affect the DB session if possible,
-        # but for simplicity and since we return it, we'll just mask the value.
-        # Note: SQLAlchemy objects are tracked, so we should be careful. 
-        # Using a dict or a pydantic model for the return is safer.
         return schemas.SystemSetting(
             key=setting.key, 
             value="********" + setting.value[-4:] if len(setting.value) > 4 else "********"
@@ -131,8 +306,18 @@ def set_setting(setting: schemas.SystemSettingBase, db: Session = Depends(get_db
         existing = crud.get_setting(db, setting.key)
         if existing:
             return existing
+            
+    # If setting media_dir, validate that it exists on disk and is not a restricted path
+    if setting.key == "media_dir":
+        val = setting.value.strip()
+        if val:
+            if not os.path.exists(val) or not os.path.isdir(val):
+                raise HTTPException(status_code=400, detail=f"Directory does not exist on server: {val}")
+            if is_forbidden_path(val):
+                raise HTTPException(status_code=403, detail="Specified directory is a restricted system path")
     
     return crud.set_setting(db, setting.key, setting.value)
+
 
 @app.get("/profile/{profile_id}", response_model=schemas.Profile)
 def get_profile(profile_id: int, db: Session = Depends(get_db)):
@@ -594,18 +779,38 @@ def get_video_scrub_info(video_id: int, db: Session = Depends(get_db)):
         "fh": 90 # approximate
     }
 
+running_scrub_tasks = set()
+
 @app.post("/video/{video_id}/generate-scrub")
 def generate_video_scrub(video_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     video = crud.get_video(db, video_id)
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
     
+    scrub_path = os.path.join(config.THUMBNAIL_DIR, "scrub", f"{video_id}_sprite.webp")
+    if os.path.exists(scrub_path):
+        return {"message": "Sprite sheet already generated"}
+        
+    if video_id in running_scrub_tasks:
+        return {"message": "Sprite sheet generation already in progress"}
+    
     media_dir_setting = crud.get_setting(db, "media_dir")
     media_base = media_dir_setting.value if media_dir_setting else config.MEDIA_DIR
     video_abs_path = os.path.join(media_base, video.filepath)
     
-    scrub_path = os.path.join(config.THUMBNAIL_DIR, "scrub", f"{video_id}_sprite.webp")
+    validate_path(media_base, video_abs_path)
+    if not os.path.exists(video_abs_path):
+        raise HTTPException(status_code=404, detail="Video file not found on disk")
+        
+    running_scrub_tasks.add(video_id)
     os.makedirs(os.path.dirname(scrub_path), exist_ok=True)
     
-    background_tasks.add_task(utils.generate_sprite_sheet, video_abs_path, scrub_path)
+    def _execute_scrub(vid, vpath, spath):
+        try:
+            utils.generate_sprite_sheet(vpath, spath)
+        finally:
+            running_scrub_tasks.discard(vid)
+            
+    background_tasks.add_task(_execute_scrub, video_id, video_abs_path, scrub_path)
     return {"message": "Sprite sheet generation started in background"}
+
