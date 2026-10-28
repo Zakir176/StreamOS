@@ -2,9 +2,16 @@ from sqlalchemy.orm import Session
 from . import models, schemas
 from .models import Video, UserProfile, SystemSetting
 
-def get_allowed_categories(age_category):
-    # Temporarily disable age-based filtering: all profiles see all categories
-    return ["kids", "teen", "adult"]
+def get_allowed_categories(age_category: str) -> list[str]:
+    cat = (age_category or "").strip().lower()
+    if cat in ("child", "kids", "kid"):
+        return ["kids"]
+    elif cat == "teen":
+        return ["kids", "teen"]
+    elif cat == "adult":
+        return ["kids", "teen", "adult"]
+    # Defensive default: if category is unrecognized or empty, restrict to kids content
+    return ["kids"]
 
 def get_profiles(db: Session):
     return db.query(UserProfile).all()

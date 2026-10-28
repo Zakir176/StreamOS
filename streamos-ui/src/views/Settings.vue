@@ -41,7 +41,13 @@
           <label>Media Library Path</label>
           <div class="path-input-group">
             <input v-model="mediaDir" placeholder="e.g. C:\Movies" class="settings-input glass" />
-            <button @click="saveMediaDir" class="save-btn small">Save Path</button>
+            <button @click="showDirPicker = true" type="button" class="browse-btn glass">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px;">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+              </svg>
+              Browse...
+            </button>
+            <button @click="saveMediaDir(true)" class="save-btn small">Save Path</button>
           </div>
           <p class="setting-hint">This is where StreamOS will look for video files.</p>
         </div>
@@ -149,16 +155,26 @@
         </div>
       </div>
     </div>
+
+    <!-- Directory Picker Modal -->
+    <DirectoryPickerModal 
+      :show="showDirPicker" 
+      :initial-path="mediaDir" 
+      @close="showDirPicker = false" 
+      @select="handleDirSelected"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import DirectoryPickerModal from '../components/DirectoryPickerModal.vue'
 
 const router = useRouter()
 const profiles = ref([])
 const showAddModal = ref(false)
+const showDirPicker = ref(false)
 const newProfile = ref({ username: '', age_category: 'adult', theme: 'midnight' })
 const mediaDir = ref('')
 const tmdbApiKey = ref('')
@@ -186,7 +202,7 @@ const fetchSettings = async () => {
   }
 }
 
-const saveMediaDir = async () => {
+const saveMediaDir = async (notify = true) => {
   try {
     const res = await fetch(`${API_BASE}/settings`, {
       method: 'POST',
@@ -194,11 +210,29 @@ const saveMediaDir = async () => {
       body: JSON.stringify({ key: 'media_dir', value: mediaDir.value })
     })
     if (res.ok) {
-      alert('Media path saved successfully!')
+      if (notify) alert('Media path saved successfully!')
+      return true
+    } else {
+      const errData = await res.json()
+      alert(errData.detail || 'Failed to save media path.')
+      return false
     }
   } catch (err) {
     console.error('Save media path failed:', err)
-    alert('Failed to save media path.')
+    if (notify) alert('Failed to save media path.')
+    return false
+  }
+}
+
+const handleDirSelected = async ({ path, scanNow }) => {
+  mediaDir.value = path
+  const saved = await saveMediaDir(false)
+  if (saved) {
+    if (scanNow) {
+      await triggerScan()
+    } else {
+      alert(`Media directory updated to: ${path}`)
+    }
   }
 }
 
@@ -537,6 +571,26 @@ onMounted(() => {
 .save-btn.small {
   padding: 0.8rem 1.5rem;
   font-size: 0.9rem;
+}
+
+.browse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.8rem 1.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 0.5rem;
+  transition: all 0.25s;
+}
+
+.browse-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
 }
 
 .setting-hint {

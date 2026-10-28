@@ -28,18 +28,21 @@ def is_safe_path(base_dir, path, follow_symlinks=True):
     Check if 'path' is safe and within 'base_dir'.
     Prevents path traversal attacks.
     """
-    if not path:
+    if not path or not base_dir:
         return False
         
-    # Get absolute paths
-    if follow_symlinks:
-        base_dir = os.path.realpath(base_dir)
-        path = os.path.realpath(path)
-    else:
-        base_dir = os.path.abspath(base_dir)
-        path = os.path.abspath(path)
-        
-    return os.path.commonpath([base_dir]) == os.path.commonpath([base_dir, path])
+    try:
+        # Get absolute paths
+        if follow_symlinks:
+            base_dir = os.path.realpath(base_dir)
+            path = os.path.realpath(path)
+        else:
+            base_dir = os.path.abspath(base_dir)
+            path = os.path.abspath(path)
+            
+        return os.path.commonpath([base_dir]) == os.path.commonpath([base_dir, path])
+    except (ValueError, OSError):
+        return False
 
 try:
     import imageio_ffmpeg
@@ -62,20 +65,20 @@ def get_video_duration(video_path):
             FFPROBE_EXE, "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", video_path
         ]
-        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
+        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=15).decode().strip()
         return float(output)
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, ValueError):
         # 2. Try ffmpeg fallback (parse from stderr)
         try:
             cmd = [FFMPEG_EXE, "-i", video_path]
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-            output, _ = process.communicate()
+            output, _ = process.communicate(timeout=15)
             
             match = re.search(r"Duration:\s(\d+):(\d+):(\d+).(\d+)", output)
             if match:
                 hours, mins, secs, ms = map(int, match.groups())
                 return hours * 3600 + mins * 60 + secs + ms / 100
-        except (subprocess.SubprocessError, FileNotFoundError):
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired, FileNotFoundError):
             pass
             
     print(f"Warning: Could not get duration for {video_path}. Ensure FFmpeg/FFprobe is installed.")
@@ -107,7 +110,7 @@ def generate_thumbnail(video_path, thumbnail_path, time_sec=None):
                     "-frames:v", "1", "-q:v", "4", "-c:v", "webp", "-y", temp_thumb
                 ]
                 try:
-                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=25)
                     if os.path.exists(temp_thumb):
                         with Image.open(temp_thumb) as img:
                             stat = ImageStat.Stat(img.convert('L'))
@@ -118,7 +121,7 @@ def generate_thumbnail(video_path, thumbnail_path, time_sec=None):
                                 best_thumb = temp_thumb
                             else:
                                 os.remove(temp_thumb)
-                except (subprocess.CalledProcessError, FileNotFoundError):
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
                     continue
             
             if best_thumb:
@@ -132,7 +135,7 @@ def generate_thumbnail(video_path, thumbnail_path, time_sec=None):
             FFMPEG_EXE, "-ss", str(time_sec), "-i", video_path,
             "-frames:v", "1", "-q:v", "4", "-c:v", "webp", "-y", thumbnail_path
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=25)
         return thumbnail_path if os.path.exists(thumbnail_path) else None
     except (subprocess.SubprocessError, FileNotFoundError) as e:
         print(f"Warning: Failed to generate thumbnail for {video_path}: {e}")
@@ -161,32 +164,50 @@ def generate_sprite_sheet(video_path, output_path, interval=10, cols=10):
         "-vf", f"fps=1/{interval},scale=160:-1",
         "-q:v", "5", "-y", os.path.join(temp_dir, "f_%05d.jpg")
     ]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+        print(f"Warning: Sprite sheet frame generation timed out or failed for {video_path}: {e}")
+        # Cleanup temp directory
+        try:
+            for f in os.listdir(temp_dir):
+                os.remove(os.path.join(temp_dir, f))
+            os.rmdir(temp_dir)
+        except OSError:
+            pass
+        return None
     
     frames = sorted([os.path.join(temp_dir, f) for f in os.listdir(temp_dir) if f.endswith(".jpg")])
     if not frames:
+        try: os.rmdir(temp_dir)
+        except OSError: pass
         return None
         
     # 2. Stitch frames into a sprite sheet
-    with Image.open(frames[0]) as first_frame:
-        fw, fh = first_frame.size
-        
-    num_frames = len(frames)
-    rows = math.ceil(num_frames / cols)
-    
-    sheet = Image.new("RGB", (fw * cols, fh * rows))
-    
-    for i, frame_path in enumerate(frames):
-        with Image.open(frame_path) as img:
-            x = (i % cols) * fw
-            y = (i // cols) * fh
-            sheet.paste(img, (x, y))
+    try:
+        with Image.open(frames[0]) as first_frame:
+            fw, fh = first_frame.size
             
-    sheet.save(output_path, "WEBP", quality=70)
-    
-    # Cleanup
-    for f in frames: os.remove(f)
-    os.rmdir(temp_dir)
+        num_frames = len(frames)
+        rows = math.ceil(num_frames / cols)
+        
+        sheet = Image.new("RGB", (fw * cols, fh * rows))
+        
+        for i, frame_path in enumerate(frames):
+            with Image.open(frame_path) as img:
+                x = (i % cols) * fw
+                y = (i // cols) * fh
+                sheet.paste(img, (x, y))
+                
+        sheet.save(output_path, "WEBP", quality=70)
+    finally:
+        # Cleanup
+        for f in frames:
+            try: os.remove(f)
+            except OSError: pass
+        try: os.rmdir(temp_dir)
+        except OSError: pass
+
     return {
         "path": output_path,
         "fw": fw,
@@ -219,14 +240,25 @@ def get_dominant_color(image_path):
     except Exception as e:
         print(f"Error calculating dominant color: {e}")
         return "rgb(20, 20, 20)"
-import requests
 
+import requests
+from urllib.parse import urlparse
 from PIL import Image
 import io
 
 def download_image(url, thumbnail_path, convert_webp=True):
-    """Download an image from a URL, optionally convert to WebP, and save locally."""
+    """Download an image from a URL, optionally convert to WebP, and save locally with SSRF protection."""
     try:
+        if not url or not (url.startswith("http://") or url.startswith("https://")):
+            print(f"Warning: Blocked non-http(s) image download: {url}")
+            return False
+            
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
+        if not hostname or hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "169.254.169.254"):
+            print(f"Warning: Blocked SSRF loopback download attempt: {url}")
+            return False
+            
         os.makedirs(os.path.dirname(thumbnail_path), exist_ok=True)
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
@@ -258,18 +290,28 @@ def generate_scrub_thumbnails(video_path, output_dir, interval=10):
         os.path.join(output_dir, "thumb_%05d.jpg")
     ]
     try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
         return True
-    except Exception as e:
+    except (subprocess.TimeoutExpired, Exception) as e:
         print(f"Error generating scrub thumbnails for {video_path}: {e}")
         return False
+
 import xml.etree.ElementTree as ET
 
 def parse_nfo(nfo_path):
-    """Parse a .nfo XML file and return a dictionary of metadata."""
+    """Parse a .nfo XML file and return a dictionary of metadata, hardened against XXE/entity expansion."""
     try:
-        tree = ET.parse(nfo_path)
-        root = tree.getroot()
+        if os.path.getsize(nfo_path) > 5 * 1024 * 1024:
+            return {}
+        with open(nfo_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            # Reject any DTD or Entity declarations to prevent XXE / Billion Laughs attacks
+            upper_content = content.upper()
+            if "<!ENTITY" in upper_content or "<!DOCTYPE" in upper_content:
+                print(f"Warning: Blocked suspicious XML entity or DOCTYPE declaration in {nfo_path}")
+                return {}
+        tree = ET.fromstring(content)
+        root = tree
         metadata = {}
         
         # Mapping of XML tags to metadata keys

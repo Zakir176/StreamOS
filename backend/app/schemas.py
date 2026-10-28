@@ -61,6 +61,9 @@ class SystemSettingBase(BaseModel):
     key: str
     value: str
 
+class ScanRequest(BaseModel):
+    media_dir: Optional[str] = None
+
 class SystemSetting(SystemSettingBase):
     class Config:
         from_attributes = True

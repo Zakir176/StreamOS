@@ -17,86 +17,116 @@
       </div>
 
       <div v-else-if="!videos || videos.length === 0" class="row-empty">No videos found for this category.</div>
-      <div v-else class="row-content" ref="rowRef">
-        <div 
-          v-for="(video, index) in videos" 
-          :key="video.id" 
-          class="video-card glass" 
-          :class="{ 'focused': index === focusedIndex }"
-          @click="$emit('play', video)"
-          @mouseenter="emit('hover', video)"
+      <div v-else class="row-wrapper">
+        <!-- Left Scroll Handle -->
+        <button 
+          v-show="canScrollLeft" 
+          class="row-handle handle-prev" 
+          @click.stop="scrollRow('left')"
+          aria-label="Scroll left"
         >
-          <div class="video-card-inner">
-            <div class="thumbnail-wrapper" :style="{ backgroundImage: video.thumbnail_placeholder ? `url(data:image/webp;base64,${video.thumbnail_placeholder})` : 'none' }">
-              <img 
-                :src="getImageUrl(video.backdrop_url || video.thumbnail_url, 400)" 
-                :alt="video.title"
-                class="thumbnail"
-                @error="onImgError"
-                @load="onImgLoad(video.id)"
-                loading="lazy"
-                :class="{ 'loaded': loadedImgs[video.id] }"
-              />
-              <div class="video-card-overlay">
-                <div class="play-btn-center">
-                  <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M5 3L19 12L5 21V3Z"/>
-                  </svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+        </button>
+
+        <div 
+          class="row-content" 
+          ref="rowRef"
+          @scroll.passive="updateScrollState"
+        >
+          <div 
+            v-for="(video, index) in videos" 
+            :key="video.id" 
+            class="video-card glass" 
+            :class="{ 'focused': index === focusedIndex }"
+            @click="$emit('play', video)"
+            @mouseenter="emit('hover', video)"
+          >
+            <div class="video-card-inner">
+              <div class="thumbnail-wrapper" :style="{ backgroundImage: video.thumbnail_placeholder ? `url(data:image/webp;base64,${video.thumbnail_placeholder})` : 'none' }">
+                <img 
+                  :src="getImageUrl(video.backdrop_url || video.thumbnail_url, 400)" 
+                  :alt="video.title"
+                  class="thumbnail"
+                  @error="onImgError"
+                  @load="onImgLoad(video.id)"
+                  loading="lazy"
+                  :class="{ 'loaded': loadedImgs[video.id] }"
+                />
+                <div class="video-card-overlay">
+                  <div class="play-btn-center">
+                    <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M5 3L19 12L5 21V3Z"/>
+                    </svg>
+                  </div>
+                </div>
+                
+                <!-- Progress Bar -->
+                <div v-if="video.current_time && video.duration" class="video-progress-container">
+                  <div class="video-progress-fill" :style="{ width: (video.current_time / video.duration * 100) + '%' }"></div>
                 </div>
               </div>
-              
-              <!-- Progress Bar -->
-              <div v-if="video.current_time && video.duration" class="video-progress-container">
-                <div class="video-progress-fill" :style="{ width: (video.current_time / video.duration * 100) + '%' }"></div>
-              </div>
-            </div>
-            <div class="video-info">
-              <p class="video-show">
-                <span v-if="video.type === 'show'">
-                  {{ video.title }}
-                </span>
-                <span v-else-if="video.show_name">
-                  {{ video.show_name }}
-                </span>
-                <span v-else>
-                  {{ video.title }}
-                </span>
-              </p>
+              <div class="video-info">
+                <p class="video-show">
+                  <span v-if="video.type === 'show'">
+                    {{ video.title }}
+                  </span>
+                  <span v-else-if="video.show_name">
+                    {{ video.show_name }}
+                  </span>
+                  <span v-else>
+                    {{ video.title }}
+                  </span>
+                </p>
 
-              <p v-if="video.type === 'episode' && video.season" class="video-episode-title">
-                <span class="video-badge">S{{ video.season }}:E{{ video.episode }}</span>
-                <span class="video-ep-name">{{ video.title }}</span>
-              </p>
-              <p v-else-if="video.release_year" class="video-meta">
-                {{ video.release_year }} <span class="dot">•</span> Movie
-              </p>
-              <p v-else-if="video.type === 'show'" class="video-meta">
-                {{ video.episodes_count }} Episodes
-              </p>
+                <p v-if="video.type === 'episode' && video.season" class="video-episode-title">
+                  <span class="video-badge">S{{ video.season }}:E{{ video.episode }}</span>
+                  <span class="video-ep-name">{{ video.title }}</span>
+                </p>
+                <p v-else-if="video.release_year" class="video-meta">
+                  {{ video.release_year }} <span class="dot">•</span> Movie
+                </p>
+                <p v-else-if="video.type === 'show'" class="video-meta">
+                  {{ video.episodes_count }} Episodes
+                </p>
 
-              <!-- Expanded Hover Info -->
-              <div class="hover-info">
-                 <div class="meta-row">
-                    <span class="match-score">98% Match</span>
-                    <span class="age-badge">13+</span>
-                    <span class="duration" v-if="video.duration">{{ Math.floor(video.duration / 60) }}m</span>
-                 </div>
-                 <div class="tag-row">
-                    <span>Exciting</span>
-                    <span class="dot">•</span>
-                    <span>Cinematic</span>
-                 </div>
+                <!-- Expanded Hover Info -->
+                <div class="hover-info">
+                   <div class="meta-row">
+                      <span class="match-score">98% Match</span>
+                      <span class="age-badge">13+</span>
+                      <span class="duration" v-if="video.duration">{{ Math.floor(video.duration / 60) }}m</span>
+                   </div>
+                   <div class="tag-row">
+                      <span>Exciting</span>
+                      <span class="dot">•</span>
+                      <span>Cinematic</span>
+                   </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
+
+        <!-- Right Scroll Handle -->
+        <button 
+          v-show="canScrollRight" 
+          class="row-handle handle-next" 
+          @click.stop="scrollRow('right')"
+          aria-label="Scroll right"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 
 const API_BASE = import.meta.env.VITE_API_BASE || `http://${window.location.hostname}:8000`
 
@@ -118,6 +148,8 @@ const props = defineProps({
 const emit = defineEmits(['play', 'hover'])
 
 const rowRef = ref(null)
+const canScrollLeft = ref(false)
+const canScrollRight = ref(true)
 
 const loadedImgs = ref({})
 const onImgLoad = (id) => {
@@ -128,7 +160,23 @@ const onImgError = (e) => {
   e.target.src = 'https://placehold.co/600x400/1e293b/f8fafc?text=No+Thumbnail'
 }
 
-import { watch, nextTick } from 'vue'
+const updateScrollState = () => {
+  if (!rowRef.value) return
+  const { scrollLeft, scrollWidth, clientWidth } = rowRef.value
+  canScrollLeft.value = scrollLeft > 10
+  canScrollRight.value = scrollLeft < scrollWidth - clientWidth - 10
+}
+
+const scrollRow = (direction) => {
+  if (!rowRef.value) return
+  const distance = Math.max(300, rowRef.value.clientWidth * 0.75)
+  rowRef.value.scrollBy({
+    left: direction === 'left' ? -distance : distance,
+    behavior: 'smooth'
+  })
+}
+
+
 watch(() => props.focusedIndex, async (newIndex) => {
   if (newIndex !== undefined && newIndex !== -1 && rowRef.value) {
     await nextTick()
@@ -138,7 +186,21 @@ watch(() => props.focusedIndex, async (newIndex) => {
     }
   }
 })
+
+watch(() => props.videos, () => {
+  nextTick(() => updateScrollState())
+}, { deep: true })
+
+onMounted(() => {
+  nextTick(() => updateScrollState())
+  window.addEventListener('resize', updateScrollState, { passive: true })
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', updateScrollState)
+})
 </script>
+
 
 <style scoped>
 .video-row {
@@ -177,18 +239,74 @@ watch(() => props.focusedIndex, async (newIndex) => {
   overflow: visible;
 }
 
+.row-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .row-content {
   display: flex;
-  gap: 0.5vw;
-  overflow-x: scroll;
+  gap: 0.8vw;
+  overflow-x: auto;
   overflow-y: visible;
   padding: 1vw 0;
   scrollbar-width: none;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+}
+
+.row-handle {
+  position: absolute;
+  top: 1vw;
+  bottom: 1vw;
+  width: 44px;
+  background: rgba(0, 0, 0, 0.7);
+  border: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 25;
+  opacity: 0;
+  transition: opacity 0.25s ease, background 0.2s ease, transform 0.2s ease;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.row-container:hover .row-handle {
+  opacity: 1;
+}
+
+.row-handle:hover {
+  background: rgba(0, 0, 0, 0.9);
+  color: var(--neon-cyan);
+}
+
+.handle-prev {
+  left: 0;
+  border-top-right-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+.handle-next {
+  right: 0;
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+}
+
+.row-handle svg {
+  width: 26px;
+  height: 26px;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
 }
 
 .row-content::-webkit-scrollbar {
   display: none;
 }
+
 
 .row-loading, .row-empty {
   padding: 2vw 0;
