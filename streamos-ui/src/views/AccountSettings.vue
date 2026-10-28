@@ -20,7 +20,13 @@
               placeholder="e.g. D:\Movies"
               class="settings-input"
             />
-            <button @click="updateMediaDir" class="action-btn primary">Update Path</button>
+            <button @click="showDirPicker = true" type="button" class="action-btn secondary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; margin-right: 6px;">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+              </svg>
+              Browse...
+            </button>
+            <button @click="updateMediaDir(true)" class="action-btn primary">Update Path</button>
           </div>
         </div>
 
@@ -84,14 +90,24 @@
         </div>
       </div>
     </div>
+
+    <!-- Directory Picker Modal -->
+    <DirectoryPickerModal 
+      :show="showDirPicker" 
+      :initial-path="mediaDir" 
+      @close="showDirPicker = false" 
+      @select="handleDirSelected"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import DirectoryPickerModal from '../components/DirectoryPickerModal.vue'
 
 const mediaDir = ref('')
 const tmdbKey = ref('')
+const showDirPicker = ref(false)
 const scanning = ref(false)
 const scraping = ref(false)
 const offlineMode = ref(false)
@@ -166,7 +182,7 @@ const triggerScrape = async () => {
     }
 }
 
-const updateMediaDir = async () => {
+const updateMediaDir = async (notify = true) => {
   try {
     const res = await fetch(`${API_BASE}/settings`, {
       method: 'POST',
@@ -174,10 +190,28 @@ const updateMediaDir = async () => {
       body: JSON.stringify({ key: 'media_dir', value: mediaDir.value })
     })
     if (res.ok) {
-      alert('Media directory updated successfully!')
+      if (notify) alert('Media directory updated successfully!')
+      return true
+    } else {
+      const data = await res.json()
+      alert(data.detail || 'Failed to update media directory')
+      return false
     }
   } catch (err) {
-    alert('Failed to update media directory')
+    if (notify) alert('Failed to update media directory')
+    return false
+  }
+}
+
+const handleDirSelected = async ({ path, scanNow }) => {
+  mediaDir.value = path
+  const saved = await updateMediaDir(false)
+  if (saved) {
+    if (scanNow) {
+      await triggerScan()
+    } else {
+      alert(`Media directory updated to: ${path}`)
+    }
   }
 }
 
