@@ -46,6 +46,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 17l5-5-5-5M19.8 12H9M13 22a10 10 0 110-20"/></svg>
                 Switch Profile
               </li>
+              <li @click="showDirPicker = true; showDropdown = false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                Change Media Folder
+              </li>
               <li @click="$router.push('/settings')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
                 Manage Profiles
@@ -138,6 +142,37 @@
     
     <main class="content">
       <h2 class="library-header">{{ libraryTitle }}</h2>
+
+      <!-- Empty Library / First Run Setup Card -->
+      <div v-if="isLibraryEmpty && !loading && !searchQuery" class="empty-library-setup glass">
+        <div class="empty-setup-glow"></div>
+        <div class="empty-setup-content">
+          <div class="setup-icon-bubble">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+              <path d="M12 11v6M9 14h6"/>
+            </svg>
+          </div>
+          <h3 class="setup-title">Your Media Library is Waiting</h3>
+          <p class="setup-desc">
+            StreamOS is ready to index your collection. Select or browse for your media folder on this computer or server to get started.
+          </p>
+          <div class="setup-actions">
+            <button class="btn-setup-primary" @click="showDirPicker = true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+              </svg>
+              Browse & Select Media Folder
+            </button>
+            <button class="btn-setup-secondary glass" @click="rescanLibrary">
+              Rescan Current Path
+            </button>
+          </div>
+          <p class="setup-current-path" v-if="currentMediaDir">
+            Current media directory: <code>{{ currentMediaDir }}</code>
+          </p>
+        </div>
+      </div>
 
       <!-- Continue Watching Row (Always Show if exists) -->
       <div v-if="searchQuery && !filteredVideos.all?.length" class="no-results">
@@ -302,6 +337,14 @@
         />
       </div>
     </div>
+
+    <!-- Directory Picker Modal -->
+    <DirectoryPickerModal 
+      :show="showDirPicker" 
+      :initial-path="currentMediaDir" 
+      @close="showDirPicker = false" 
+      @select="handleDirSelected"
+    />
   </div>
 </template>
 
@@ -310,6 +353,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import VideoRow from '../components/VideoRow.vue'
 import VideoPlayer from '../components/VideoPlayer.vue'
+import DirectoryPickerModal from '../components/DirectoryPickerModal.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -329,6 +373,60 @@ const loading = ref(true)
 const selectedVideoUrl = ref(null)
 const selectedVideoId = ref(null)
 const selectedVideoTitle = ref(null)
+
+const showDirPicker = ref(false)
+const currentMediaDir = ref('')
+
+const isLibraryEmpty = computed(() => {
+  const v = videos.value
+  if (!v) return true
+  const moviesLen = v.movies?.length || 0
+  const showsLen = v.tv_shows?.length || 0
+  const animeLen = v.anime?.length || 0
+  const allLen = v.all?.length || 0
+  return moviesLen === 0 && showsLen === 0 && animeLen === 0 && allLen === 0
+})
+
+const fetchMediaDirSetting = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/settings/media_dir`)
+    if (res.ok) {
+      const data = await res.json()
+      currentMediaDir.value = data.value || ''
+    }
+  } catch (err) {
+    console.error('Failed to fetch media dir setting:', err)
+  }
+}
+
+const handleDirSelected = async ({ path, scanNow }) => {
+  try {
+    loading.value = true
+    currentMediaDir.value = path
+    if (scanNow) {
+      const res = await fetch(`${API_BASE}/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ media_dir: path })
+      })
+      const data = await res.json()
+      alert(data.message || 'Library scan completed!')
+    } else {
+      await fetch(`${API_BASE}/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'media_dir', value: path })
+      })
+      alert(`Media directory updated to: ${path}`)
+    }
+    await fetchLibrary()
+  } catch (err) {
+    console.error('Error applying selected directory:', err)
+    alert('Failed to set media directory or scan library.')
+  } finally {
+    loading.value = false
+  }
+}
 const selectedSeries = ref(null)
 const isScrolled = ref(false)
 const hideTimer = ref(null)
@@ -346,7 +444,7 @@ const searchQuery = ref('')
 const searchRef = ref(null)
 
 // Ambilight Logic
-const currentAmbientColor = ref('rgb(20, 20, 20)')
+const currentAmbientColor = ref('rgb(229, 9, 20)')
 const ambientColorOpacity = ref(0.4)
 
 let colorDebounce = null
@@ -356,7 +454,7 @@ const handleHover = (video) => {
     if (video.dominant_color) {
       currentAmbientColor.value = video.dominant_color
     }
-  }, 50)
+  }, 150)
 }
 
 const ambientStyles = computed(() => ({
@@ -504,10 +602,12 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('scroll', handleScroll)
   stopBillboardTimer()
   if (trailerHoverTimer.value) clearTimeout(trailerHoverTimer.value)
   if (hideTimer.value) clearTimeout(hideTimer.value)
 })
+
 
 // Billboard Carousel & Trailer Peek
 const currentBillboardIndex = ref(0)
@@ -686,7 +786,12 @@ const filteredVideos = computed(() => {
 })
 
 onMounted(async () => {
-  window.addEventListener('scroll', handleScroll)
+  if (!profileId.value || profileId.value === 'null') {
+    router.replace('/')
+    return
+  }
+
+  window.addEventListener('scroll', handleScroll, { passive: true })
   
   // Fetch profiles for the switcher/avatar
   try {
@@ -697,6 +802,7 @@ onMounted(async () => {
   }
 
   fetchLibrary()
+  fetchMediaDirSetting()
 })
 
 const fetchLibrary = async () => {
@@ -711,9 +817,17 @@ const fetchLibrary = async () => {
   }
 }
 
+let scrollTicking = false
 const handleScroll = () => {
-  isScrolled.value = window.scrollY > 20
+  if (!scrollTicking) {
+    window.requestAnimationFrame(() => {
+      isScrolled.value = window.scrollY > 20
+      scrollTicking = false
+    })
+    scrollTicking = true
+  }
 }
+
 
 const handleVideoClick = (video) => {
   // Sync keyboard focus to the clicked item
@@ -1246,6 +1360,7 @@ const closePlayer = () => {
   z-index: 1;
   transition: opacity 1.2s ease;
   animation: kenBurns 20s infinite alternate linear;
+  will-change: transform;
 }
 
 @keyframes kenBurns {
@@ -1701,10 +1816,13 @@ const closePlayer = () => {
   height: 100%;
   background: radial-gradient(circle at 50% 30%, var(--ambient-glow-transparent) 0%, transparent 70%);
   pointer-events: none;
-  z-index: 1;
-  transition: background 1.5s ease;
-  mix-blend-mode: screen;
+  z-index: 0;
+  transition: background 1.2s ease;
+  transform: translateZ(0);
+  will-change: opacity, transform;
+  opacity: 0.85;
 }
+
 
 .library-container {
   transition: background 1.5s ease;
@@ -1758,5 +1876,133 @@ const closePlayer = () => {
 
 .video-row:hover .row-title {
   color: var(--ambient-accent);
+}
+
+/* Empty Library Setup Card */
+.empty-library-setup {
+  position: relative;
+  max-width: 680px;
+  margin: 40px auto 60px;
+  padding: 48px 36px;
+  text-align: center;
+  border-radius: var(--radius-main);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 30px rgba(229, 9, 20, 0.12);
+  overflow: hidden;
+  animation: fadeIn 0.6s ease-out;
+}
+
+.empty-setup-glow {
+  position: absolute;
+  top: -50px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 300px;
+  height: 150px;
+  background: radial-gradient(circle, rgba(229, 9, 20, 0.35) 0%, transparent 70%);
+  filter: blur(40px);
+  pointer-events: none;
+}
+
+.setup-icon-bubble {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 20px;
+  border-radius: 20px;
+  background: rgba(229, 9, 20, 0.15);
+  border: 1px solid rgba(229, 9, 20, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--netflix-red);
+  box-shadow: 0 10px 25px rgba(229, 9, 20, 0.25);
+}
+
+.setup-icon-bubble svg {
+  width: 36px;
+  height: 36px;
+}
+
+.setup-title {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: #fff;
+  margin: 0 0 12px;
+  letter-spacing: -0.02em;
+}
+
+.setup-desc {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  max-width: 480px;
+  margin: 0 auto 28px;
+}
+
+.setup-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.btn-setup-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--netflix-red);
+  color: #fff;
+  border: none;
+  padding: 14px 28px;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+  box-shadow: 0 4px 20px rgba(229, 9, 20, 0.45);
+}
+
+.btn-setup-primary svg {
+  width: 20px;
+  height: 20px;
+}
+
+.btn-setup-primary:hover {
+  background: #ff1f2d;
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 30px rgba(229, 9, 20, 0.6);
+}
+
+.btn-setup-secondary {
+  padding: 14px 24px;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+.btn-setup-secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.setup-current-path {
+  margin-top: 24px;
+  margin-bottom: 0;
+  font-size: 0.85rem;
+  color: #777;
+}
+
+.setup-current-path code {
+  color: var(--neon-cyan);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-family: monospace;
 }
 </style>
