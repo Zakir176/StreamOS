@@ -1,7 +1,13 @@
 import os
 import re
+import threading
 from . import models, database, crud, utils
 from .config import MEDIA_DIR, THUMBNAIL_DIR, IGNORED_MEDIA_PATTERNS
+
+_scan_lock = threading.Lock()
+
+def is_scan_running():
+    return _scan_lock.locked()
 
 def parse_metadata(filename):
     # Common patterns: S01E01, 1x01, Season 1 Episode 1
@@ -29,16 +35,34 @@ def parse_metadata(filename):
         
     return "movie", os.path.splitext(filename)[0].replace('.', ' ').replace('_', ' ').strip(), None, None, None
 
-def scan_media():
+def scan_media(custom_dir=None):
+    if not _scan_lock.acquire(blocking=False):
+        return {
+            "success": False,
+            "added": 0,
+            "updated": 0,
+            "removed": 0,
+            "series_removed": 0,
+            "message": "A library scan is already in progress. Please wait for it to complete."
+        }
+    try:
+        return _do_scan_media(custom_dir)
+    finally:
+        _scan_lock.release()
+
+def _do_scan_media(custom_dir=None):
     # Ensure DB tables exist
     models.Base.metadata.create_all(bind=database.engine)
-    
     db = database.SessionLocal()
     crud.seed_defaults(db)
     
-    # Get media directory from settings
-    media_dir_setting = crud.get_setting(db, "media_dir")
-    media_dir = media_dir_setting.value if media_dir_setting else MEDIA_DIR
+    # Get media directory from custom_dir or settings
+    if custom_dir:
+        media_dir = custom_dir
+        crud.set_setting(db, "media_dir", custom_dir)
+    else:
+        media_dir_setting = crud.get_setting(db, "media_dir")
+        media_dir = media_dir_setting.value if media_dir_setting else MEDIA_DIR
     
     if not os.path.exists(media_dir):
         print(f"Error: Media directory does not exist: {media_dir}")
@@ -52,6 +76,8 @@ def scan_media():
             "series_removed": 0,
             "message": f"Media directory does not exist: {media_dir}"
         }
+
+
 
     print(f"Scanning media in: {media_dir}")
 
@@ -273,7 +299,6 @@ def scan_media():
             print(f"Removing empty series: {series.title}")
             db.delete(series)
             series_removed += 1
-
     db.commit()
     db.close()
 
@@ -287,5 +312,11 @@ def scan_media():
         "message": f"Scan completed. Added {added_count}, updated {updated_count}, removed {removed_count} videos."
     }
 
+
+
 if __name__ == "__main__":
-    scan_media()
+    import argparse
+    parser = argparse.ArgumentParser(description="StreamOS Media Scanner")
+    parser.add_argument("--dir", dest="media_dir", default=None, help="Path to media directory to scan")
+    args = parser.parse_args()
+    scan_media(custom_dir=args.media_dir)
